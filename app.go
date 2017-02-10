@@ -19,15 +19,16 @@ func main() {
 
 	spin := spinner.New(spinner.CharSets[35], time.Second/3)
 	spin.Color("green")
-	spin.Start()
 
 	in := flag.String("dir", "./", "dir is to specify what folder to parse types from")
 	file := flag.String("file", "-", "file is to parse a single file. Will override a directory")
 	out := flag.String("out", "./", "dir is to specify what folder to parse types to")
 	recursive := flag.Bool("r", true, "to recursively ascend all folders in dir")
+	flag.Usage = usage
 	flag.Parse()
 
 	p := parse.New(*recursive)
+	spin.Start()
 	if *file != "-" {
 		if !strings.HasSuffix(*file, ".go") {
 			log.Error("the file passed in is not a go file.")
