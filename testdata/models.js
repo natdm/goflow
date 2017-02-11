@@ -41,21 +41,22 @@ export type EmbeddedAnimal = {
 	name: string,
 	some_horse_attrib: string,
 	doohickey: string,
-	doohickey2: string,	//doohickey two
+	doohickey2: string,	// doohickey two
 }
 
 export type EmbeddedAnimal2 = {
 	breed: string,
 	name: string,
-	: string,	//birthday comment
-	: string,
-	: string,	//a duration
+	birthday: string,	// birthday comment
+	date: string,
+	duration: string,	// a duration
+	age: number,
 }
 
 export type Horse = {
 	some_horse_attrib: string,
 	doohickey: string,
-	doohickey2: string,	//doohickey two
+	doohickey2: string,	// doohickey two
 }
 
 // Maps is for testing maps. These are the hardest part.
@@ -77,20 +78,20 @@ export type NoIgnoredComment = {
 
 // Person has many types and should all convert correctly
 export type Person = {
-	name: string,	//This is a name comment
+	name: string,	// This is a name comment
 	age: number,
-	StringOverride: String,	//Override `string` with `String`
+	StringOverride: String,	// Override `string` with `String`
 	age64: number,
 	flow_is_awesome: boolean,
 	nullable:  ?string,
-	animals_array: Array<Animal>,	//I have no pointer
-	animals_array_ptr:  ?Array<Animal>,	//I am a pointer
-	animals_array_ptr_2: Array<Animal>,	//I hold pointers
+	animals_array: Array<Animal>,	// I have no pointer
+	animals_array_ptr:  ?Array<Animal>,	// I am a pointer
+	animals_array_ptr_2: Array<Animal>,	// I hold pointers
 	payrate: Payrate,
 	hascomma: string,
 	some_generator: Generator,
 	has_lots_of_tags: string,
-	inner_struct: Object,	//I have a comment in a nested struct
+	inner_struct: Object,	// I have a comment in a nested struct
 	map_data: { [key: string]: number },
 }
 
@@ -98,10 +99,10 @@ export type Person = {
 export type TestFlowTags = {
 	person: Person,
 	persona: Person,
-	override_name_b: Person,	//should have new name
-	personc: OverrideTypeA,	//should have original name but overriding type
+	override_name_b: Person,	// should have new name
+	personc: OverrideTypeA,	// should have original name but overriding type
 	override_name_d: OverrideTypeB,
-	override_name_f: Person,	//should have new name
+	override_name_f: Person,	// should have new name
 }
 
 export type Time = {
@@ -110,10 +111,10 @@ export type Time = {
 
 export type Whatever = {
 	doohickey: string,
-	doohickey2: string,	//doohickey two
+	doohickey2: string,	// doohickey two
 }
 
 export type Whatever2 = {
-	doohickey2: string,	//doohickey two
+	doohickey2: string,	// doohickey two
 }
 

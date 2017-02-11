@@ -73,6 +73,7 @@ type EmbeddedAnimal2 struct {
 	Birthday     string        `json:"birthday"` // birthday comment
 	Date         time.Time     `json:"date"`
 	SomeDuration time.Duration `json:"duration"` // a duration
+	Age          int           `json:"age"`
 }
 
 type Time struct {

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"io"
+
 	log "github.com/Sirupsen/logrus"
 )
 
@@ -26,7 +28,7 @@ type Parse struct {
 	baseMappings map[string]field
 	comments     map[string]string
 	embeds       map[string][]string
-	Outfile      *os.File
+	outfile      io.Writer
 }
 
 // New returns a new parser
@@ -38,7 +40,7 @@ func New(r bool, f *os.File) *Parse {
 		baseMappings: make(map[string]field),
 		Files:        []string{},
 		recursive:    r,
-		Outfile:      f,
+		outfile:      f,
 	}
 }
 
@@ -78,68 +80,6 @@ type field struct {
 	// Children are used to gain access to nested (not embedded) structs.
 	// Not currently supported by flow, but keeping the logic in case it is soon.
 	children []field
-}
-
-// WriteStructBody writes the body of a Go type as a Flow type
-func (p *Parse) WriteStructBody(s field, level int) {
-	var name, typ string
-	if s.tags.flow.name != "" {
-		name = s.tags.flow.name
-	} else {
-		name = s.tags.json
-	}
-	if s.tags.flow.typ != "" {
-		typ = s.tags.flow.typ
-	} else {
-		typ = s.typ
-	}
-
-	// This checks for an embedded struct, writes the original struct from p.Mappings, and does not write the
-	// note of type, "embedded". This parses all embedded structs, even embedded-embedded structs. Woop!
-	if s.typ == "embedded" {
-		if v, ok := p.mappings[s.tags.flow.name]; ok {
-			for _, x := range v {
-				if x.tags.flow.name != "" {
-					name = x.tags.flow.name
-				} else {
-					name = x.tags.json
-				}
-				if x.typ == "embedded" {
-					p.WriteStructBody(x, 0)
-					continue
-				}
-				if x.tags.flow.typ != "" {
-					typ = x.tags.flow.typ
-				} else {
-					typ = x.typ
-				}
-
-				p.writeLine(name, typ, x.comment, 0)
-			}
-		}
-		return
-	}
-
-	if s.typ == "struct" {
-		// Indent the struct key
-		for i := 0; i < level; i++ {
-			p.Write("\t")
-		}
-		p.Write(fmt.Sprintf("\t%s: object {\n", name))
-		for i := range s.children {
-			p.WriteStructBody(s.children[i], level+1)
-		}
-		for i := level; i > 0; i-- {
-			// Indent the ending struct braces
-			for j := level; j > 0; j-- {
-				p.Write("\t")
-			}
-		}
-		p.Write("\t},\n")
-		return
-	}
-
-	p.writeLine(name, typ, s.comment, level)
 }
 
 // ParseDir parses a directory for all go files
@@ -195,13 +135,11 @@ func (p *Parse) ParseFiles() (e error) {
 				structKeys = append(structKeys, k)
 			}
 			sort.Strings(structKeys)
+			p.Lock()
 			for _, structName := range structKeys {
-				p.Lock()
 				p.mappings[structName] = p.parseStruct(structMap[structName], structName, bs)
-				p.Unlock()
 			}
-			log.Printf("\n%+v\n", p.mappings["EmbeddedAnimal2"])
-			log.Printf("\n%+v\n", p.mappings["Animal"])
+			p.Unlock()
 			baseKeys := make([]string, 0, len(baseMap))
 			for k := range baseMap {
 				baseKeys = append(baseKeys, k)
@@ -245,9 +183,6 @@ func (p *Parse) parseTypes(f *ast.File) (map[string]*ast.FieldList, map[string]s
 			if !ok {
 				continue
 			}
-			// log.Printf("adding %s to structMap\n", d.Name)
-			// log.Println(d.Kind)
-			// log.Println(d.Type)
 			structMap[ts.Name.String()] = x.Fields
 		case *ast.InterfaceType:
 			continue
@@ -275,6 +210,7 @@ func (p *Parse) parseStruct(fs *ast.FieldList, name string, bs []byte) []field {
 	if fs == nil {
 		return out
 	}
+
 	for _, f := range fs.List {
 		newField := field{}
 
@@ -298,22 +234,19 @@ func (p *Parse) parseStruct(fs *ast.FieldList, name string, bs []byte) []field {
 				log.Printf("unknown type, %s\n", f.Type)
 			}
 			out = append(out, newField)
-
 			continue
 		}
 
+		// Parse tags after looking for embedded types.
+		// Ignore any json-ignore tags
 		if f.Tag == nil || strings.Contains(f.Tag.Value, "json:\"-\"") {
 			continue
 		}
 
 		// If there are JSON tags,  parse it.
-		if strings.Contains(f.Tag.Value, "json") {
-			// log.Printf("found a tag for %s: %s\n", field.Names[0].String(), field.Tag.Value)
+		if strings.Contains(f.Tag.Value, "json:") {
 			newField.name = f.Names[0].String()
 			newField.tags.original = f.Tag.Value
-			if newField.name == "duration" {
-				log.Println(newField)
-			}
 			if f.Comment != nil {
 				newField.comment = f.Comment.Text()
 			}
@@ -358,12 +291,8 @@ func (p *Parse) parseStruct(fs *ast.FieldList, name string, bs []byte) []field {
 					newField.typ = t
 				}
 			}
+			out = append(out, newField)
 		}
-		if newField.name == "SomeDuration" || newField.name == "Nullable" {
-			// js, _ := json.MarshalIndent(newField, "", "\t")
-			// log.Println(string(js))
-		}
-		out = append(out, newField)
 	}
 	return out
 }
@@ -400,8 +329,13 @@ func parseArray(ts *ast.ArrayType) string {
 }
 
 func parseMap(ts *ast.MapType) string {
-	var key, val string
-	ast.Inspect(ts.Key, func(n ast.Node) bool {
+	return fmt.Sprintf("{ [key: %s]: %s }", inspectNode(ts.Key), inspectNode(ts.Value))
+}
+
+// inspectNode checks what is determined to be the value of a node based on a type-assertion of the node.
+func inspectNode(node ast.Node) string {
+	var out string
+	ast.Inspect(node, func(n ast.Node) bool {
 		var s string
 		switch y := n.(type) {
 		case *ast.BasicLit:
@@ -409,37 +343,18 @@ func parseMap(ts *ast.MapType) string {
 		case *ast.Ident:
 			s = y.Name
 		case *ast.StarExpr:
-			key = "?"
+			out = "?"
 		}
 
 		if s != "" {
 			if s == "error" {
 				s = "string"
 			}
-			key += s
+			out += s
 		}
 		return true
 	})
-	ast.Inspect(ts.Value, func(n ast.Node) bool {
-		var s string
-		switch y := n.(type) {
-		case *ast.BasicLit:
-			s = y.Value
-		case *ast.Ident:
-			s = y.Name
-		case *ast.StarExpr:
-			val = "?"
-		}
-
-		if s != "" {
-			if s == "error" {
-				s = "string"
-			}
-			val += s
-		}
-		return true
-	})
-	return fmt.Sprintf("{ [key: %s]: %s }", key, val)
+	return out
 }
 
 func removeDuplicates(s []string) []string {
@@ -460,49 +375,12 @@ func removeDuplicates(s []string) []string {
 	return cp
 }
 
-// WriteLine writes one line of a struct body
-func (p *Parse) writeLine(name, t, comment string, level int) {
-	for i := 0; i < level; i++ {
-		// Indent each line the amount of levels it is deep
-		p.Write("\t")
-	}
-	if comment != "" {
-		p.Write(fmt.Sprintf("\t%s: %s,\t//%s", name, t, comment))
-	} else {
-		p.Write(fmt.Sprintf("\t%s: %s,\n", name, t))
-	}
-}
-
-func (p *Parse) Write(line string) {
-	if _, err := p.Outfile.WriteString(line); err != nil {
-		log.WithError(err).Fatalln("error writing")
-	}
-}
-
-var conversions = []string{
-	"*", "?",
-	"int64", "number",
-	"int32", "number",
-	"int16", "number",
-	"int8", "number",
-	"int", "number",
-	"uint64", "number",
-	"uint32", "number",
-	"uint16", "number",
-	"uint8", "number",
-	"uint", "number",
-	"uintptr", "number",
-	"byte", "number",
-	"rune", "number",
-	"float32", "number",
-	"float64", "number",
-	"complex64", "number",
-	"complex128", "number",
-	"bool", "boolean"}
-
 // updateTags updates tags in place. If a comma is before an ending quote, it stops at the comma
 func updateTags(f []field) {
 	for i := range f {
+		if strings.Contains(f[i].comment, "a duration") {
+			log.Println(f[i])
+		}
 		// If the type is not exported, ignore the type and all fields
 		// Set it to blank to ignore later
 		if !isExported(f[i].name) {
@@ -510,7 +388,6 @@ func updateTags(f []field) {
 			return
 		}
 		flowTags := parseFlowTag(getTag("flow", f[i].tags.original))
-
 		f[i].tags.json = getTag("json", f[i].tags.original)
 		f[i].tags.flow = flowTags
 		if flowTags.typ != "" {
@@ -566,6 +443,28 @@ func updateTypes(name string, fields []field) {
 }
 
 func updateType(t string) string {
+	// conversions is used in strings.Replacer to replace each key/val pair. Left is Go, right is Flow.
+	conversions := []string{
+		"*", "?",
+		"int64", "number",
+		"int32", "number",
+		"int16", "number",
+		"int8", "number",
+		"int", "number",
+		"uint64", "number",
+		"uint32", "number",
+		"uint16", "number",
+		"uint8", "number",
+		"uint", "number",
+		"uintptr", "number",
+		"byte", "number",
+		"rune", "number",
+		"float32", "number",
+		"float64", "number",
+		"complex64", "number",
+		"complex128", "number",
+		"bool", "boolean"}
+
 	replacer := strings.NewReplacer(conversions...)
 	return replacer.Replace(t)
 }
@@ -584,90 +483,6 @@ func removeUnexported(m map[string][]field) {
 	for k := range m {
 		if !isExported(k) {
 			delete(m, k)
-		}
-	}
-}
-
-// WriteDocument writes most of the types to the p.Writer. Should change this to be *ALL* of it, later.
-func (p *Parse) WriteDocument() {
-	p.Write("//@flow\n\n// DO NOT EDIT -- automatically generated by goflow\n\n")
-	removeUnexported(p.mappings)
-	for k, v := range p.mappings {
-		updateTypes(k, v)
-		updateTags(v)
-	}
-
-	for k := range p.baseMappings {
-		p.baseMappings[k] = field{
-			typ:     updateType(p.baseMappings[k].typ),
-			name:    p.baseMappings[k].name,
-			comment: p.baseMappings[k].comment,
-			tags:    p.baseMappings[k].tags,
-		}
-	}
-
-	// Sort the base types alphabetically
-	sortedBase := []string{}
-	for k := range p.baseMappings {
-		sortedBase = append(sortedBase, k)
-	}
-	sort.Strings(sortedBase)
-
-	// Sort the structs alphabetically
-	sortedStructs := []string{}
-	for k := range p.mappings {
-		sortedStructs = append(sortedStructs, k)
-	}
-	sort.Strings(sortedStructs)
-
-	for _, v := range sortedBase {
-		if c, ok := p.comments[v]; ok {
-			if strings.Contains(c, "// flowignore") {
-				continue
-			}
-			comment := strings.Replace(c, "\n", "\n// ", -1)
-			comment = strings.TrimSuffix(comment, `// `)
-			p.Write(fmt.Sprintf("// %s", comment))
-		}
-		p.Write(fmt.Sprintf("export type %s = %s\n\n", p.baseMappings[v].name, p.baseMappings[v].typ))
-	}
-
-	for _, v := range sortedStructs {
-		if len(p.mappings[v]) == 0 {
-			continue
-		}
-
-		strict := false
-		if c, ok := p.comments[v]; ok {
-
-			// Ignore flowignore comments
-			if strings.Contains(c, "\n@flowignore\n") {
-				continue
-			}
-
-			if strings.Contains(c, "\n@strict\n") {
-				strict = true
-			}
-
-			comment := strings.Replace(c, "\n", "\n// ", -1)
-			comment = strings.TrimSuffix(comment, `// `)
-			p.Write(fmt.Sprintf("// %s", comment))
-		}
-
-		if strict {
-			p.Write(fmt.Sprintf("export type %s = {|\n", v))
-		} else {
-			p.Write(fmt.Sprintf("export type %s = {\n", v))
-		}
-
-		for _, s := range p.mappings[v] {
-			p.WriteStructBody(s, 0)
-		}
-
-		if strict {
-			p.Write(fmt.Sprint("|}\n\n"))
-		} else {
-			p.Write(fmt.Sprint("}\n\n"))
 		}
 	}
 }
