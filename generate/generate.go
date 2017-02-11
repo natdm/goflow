@@ -37,17 +37,16 @@ var conversions = []string{
 // UpdateTags updates tags in place. If a comma is before an ending quote, it stops at the comma
 func UpdateTags(f []parse.Field) {
 	for i := range f {
-
 		// If the type is not exported, ignore the type and all fields
 		// Set it to blank to ignore later
 		if !IsExported(f[i].Name) {
 			f = []parse.Field{}
 			return
 		}
-		flowTags := parseFlowTag(getTag("flow", f[i].JSONTags.Original))
+		flowTags := parseFlowTag(getTag("flow", f[i].Tags.Original))
 
-		f[i].JSONTags.JSON = getTag("json", f[i].JSONTags.Original)
-		f[i].JSONTags.Flow = flowTags
+		f[i].Tags.JSON = getTag("json", f[i].Tags.Original)
+		f[i].Tags.Flow = flowTags
 		if flowTags.Type != "" {
 			f[i].Type = flowTags.Type
 		} else if f[i].Type == "struct" {

@@ -49,8 +49,30 @@ type TestFlowTags struct {
 	PersonF Person `json:"personf" flow:"override_name_f."` // should have new name
 }
 
+type Whatever2 struct {
+	Doohickey2 string `json:"doohickey2"` // doohickey two
+}
+
+type Whatever struct {
+	Doohickey string `json:"doohickey"`
+	Whatever2
+}
+
+type Horse struct {
+	SomeHorseAttrib string `json:"some_horse_attrib"`
+	Whatever
+}
+
 type EmbeddedAnimal struct {
 	Animal
+	Horse
+}
+
+type EmbeddedAnimal2 struct {
+	Animal                     // comment
+	Birthday     string        `json:"birthday"` // birthday comment
+	Date         time.Time     `json:"date"`
+	SomeDuration time.Duration `json:"duration"` // a duration
 }
 
 type Time struct {

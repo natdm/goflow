@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 // Parse is responsible for handling all the logic for parsing
@@ -24,6 +26,7 @@ type Parse struct {
 	Mappings     map[string][]Field
 	BaseMappings map[string]Field
 	Comments     map[string]string
+	Embeds       map[string][]string
 }
 
 // New returns a new parser
@@ -31,6 +34,7 @@ func New(r bool) *Parse {
 	return &Parse{
 		Comments:     make(map[string]string),
 		Mappings:     make(map[string][]Field),
+		Embeds:       make(map[string][]string),
 		BaseMappings: make(map[string]Field),
 		Files:        []string{},
 		recursive:    r,
@@ -63,9 +67,9 @@ type Field struct {
 	// flow
 	Comment string
 
-	// JSONTags represents all the Go json tags for which the fields
+	// Tags represents all the Go json tags for which the fields
 	// in the Flow type will be named
-	JSONTags Tag
+	Tags Tag
 
 	// Go type, printed as string
 	Type string
@@ -126,23 +130,24 @@ func (p *Parse) ParseFiles() (e error) {
 			sort.Strings(structKeys)
 			for _, structName := range structKeys {
 				p.Lock()
-				p.Mappings[structName] = p.parseStruct(structMap[structName], bs)
+				p.Mappings[structName] = p.parseStruct(structMap[structName], structName, bs)
 				p.Unlock()
 			}
-
+			log.Printf("\n%+v\n", p.Mappings["EmbeddedAnimal2"])
+			log.Printf("\n%+v\n", p.Mappings["Animal"])
 			baseKeys := make([]string, 0, len(baseMap))
 			for k := range baseMap {
 				baseKeys = append(baseKeys, k)
 			}
 			sort.Strings(baseKeys)
+			p.Lock()
 			for _, baseName := range baseKeys {
-				p.Lock()
 				p.BaseMappings[baseName] = Field{
 					Type: baseMap[baseName],
 					Name: baseName,
 				}
-				p.Unlock()
 			}
+			p.Unlock()
 		}(fname)
 	}
 	wg.Wait()
@@ -229,12 +234,12 @@ func (p *Parse) parseTypes(f *ast.File) (map[string]*ast.FieldList, map[string]s
 	// range over the structs and fill struct map
 	for _, d := range f.Scope.Objects {
 		if f.Comments != nil {
+			p.Lock()
 			for _, v := range f.Comments {
 				c := v.Text()
-				p.Lock()
 				p.Comments[firstWord(c)] = c
-				p.Unlock()
 			}
+			p.Unlock()
 		}
 		ts, ok := d.Decl.(*ast.TypeSpec)
 		if !ok {
@@ -247,6 +252,9 @@ func (p *Parse) parseTypes(f *ast.File) (map[string]*ast.FieldList, map[string]s
 			if !ok {
 				continue
 			}
+			// log.Printf("adding %s to structMap\n", d.Name)
+			// log.Println(d.Kind)
+			// log.Println(d.Type)
 			structMap[ts.Name.String()] = x.Fields
 		case *ast.InterfaceType:
 			continue
@@ -269,17 +277,35 @@ func (p *Parse) parseTypes(f *ast.File) (map[string]*ast.FieldList, map[string]s
 	return structMap, baseMap
 }
 
-func (p *Parse) parseStruct(fs *ast.FieldList, bs []byte) []Field {
+func (p *Parse) parseStruct(fs *ast.FieldList, name string, bs []byte) []Field {
 	out := []Field{}
+	if fs == nil {
+		return out
+	}
 	for _, field := range fs.List {
 		newField := Field{}
-		if len(field.Names) == 0 {
 
-			// Somewhere in here lies the answer to getting the embedded structs
-			//
-			embededStructName := string(bs[field.Type.Pos()-1 : field.Type.End()-1])
-			_ = embededStructName
-			// Need logic to save types previously declared and declare the fields in those types in here.
+		if len(field.Names) == 0 {
+			// // Need logic to save types previously declared and declare the fields in those types in here.
+			switch field.Type.(type) {
+			case *ast.Ident:
+				// Treat as embedded struct
+				t := string(bs[field.Type.Pos()-1 : field.Type.End()-1])
+				// p.Embeds[name] = append(p.Embeds[name], t)
+				if field.Comment != nil {
+					newField.Comment = field.Comment.Text()
+				}
+				newField.Type = "embedded"
+				newField.Tags = Tag{
+					Flow: FlowTag{
+						Name: t,
+					},
+				}
+			default:
+				log.Printf("unknown type, %s\n", field.Type)
+			}
+			out = append(out, newField)
+
 			continue
 		}
 
@@ -287,27 +313,25 @@ func (p *Parse) parseStruct(fs *ast.FieldList, bs []byte) []Field {
 			continue
 		}
 
+		// If there are JSON tags,  parse it.
 		if strings.Contains(field.Tag.Value, "json") {
+			// log.Printf("found a tag for %s: %s\n", field.Names[0].String(), field.Tag.Value)
 			newField.Name = field.Names[0].String()
-			newField.JSONTags.Original = field.Tag.Value
+			newField.Tags.Original = field.Tag.Value
+			if newField.Name == "duration" {
+				log.Println(newField)
+			}
 			if field.Comment != nil {
 				newField.Comment = field.Comment.Text()
 			}
-
 			switch field.Type.(type) {
 			case *ast.InterfaceType:
 				newField.Type = "Object"
 			case *ast.MapType:
-				x, ok := field.Type.(*ast.MapType)
-				if !ok {
-					continue
-				}
+				x := field.Type.(*ast.MapType)
 				newField.Type = parseMap(x)
 			case *ast.ArrayType:
-				x, ok := field.Type.(*ast.ArrayType)
-				if !ok {
-					continue
-				}
+				x := field.Type.(*ast.ArrayType)
 				newField.Type = parseArray(x)
 			case *ast.StructType:
 				// commented out until I can find out how Flow would support nested objects. They may not.
@@ -322,10 +346,7 @@ func (p *Parse) parseStruct(fs *ast.FieldList, bs []byte) []Field {
 				// newField.Children = p.parseStruct(x.Fields, bs)
 				newField.Type = "Object"
 			case *ast.StarExpr:
-				x, ok := field.Type.(*ast.StarExpr)
-				if !ok {
-					continue
-				}
+				x := field.Type.(*ast.StarExpr)
 				t := string(bs[x.Pos()-2 : x.End()-1])
 				t = strings.Replace(t, "*", "?", -1)
 				t = strings.Replace(t, "time.Duration", "string", -1)
@@ -345,8 +366,109 @@ func (p *Parse) parseStruct(fs *ast.FieldList, bs []byte) []Field {
 				}
 			}
 		}
+		if newField.Name == "SomeDuration" || newField.Name == "Nullable" {
+			// js, _ := json.MarshalIndent(newField, "", "\t")
+			// log.Println(string(js))
+		}
 		out = append(out, newField)
-
 	}
 	return out
+}
+
+func removeDuplicates(s []string) []string {
+	found := make(map[string]bool)
+	j := 0
+	for i, x := range s {
+		if !found[x] {
+			found[x] = true
+			(s)[j] = (s)[i]
+			j++
+		}
+	}
+	s = (s)[:j]
+	cp := []string{}
+	for _, v := range s {
+		cp = append(cp, v)
+	}
+	return cp
+}
+
+func (p *Parse) WriteStructBody(s Field, level int, fi *os.File) {
+	var name, typ string
+	if s.Tags.Flow.Name != "" {
+		name = s.Tags.Flow.Name
+	} else {
+		name = s.Tags.JSON
+	}
+	if s.Tags.Flow.Type != "" {
+		typ = s.Tags.Flow.Type
+	} else {
+		typ = s.Type
+	}
+
+	// This checks for an embedded struct, writes the original struct from p.Mappings, and does not write the
+	// note of type, "embedded". This parses all embedded structs, even embedded-embedded structs. Woop!
+	if s.Type == "embedded" {
+		if v, ok := p.Mappings[s.Tags.Flow.Name]; ok {
+			for _, x := range v {
+				if x.Tags.Flow.Name != "" {
+					name = x.Tags.Flow.Name
+				} else {
+					name = x.Tags.JSON
+				}
+				if x.Type == "embedded" {
+					p.WriteStructBody(x, 0, fi)
+					continue
+				}
+				if x.Tags.Flow.Type != "" {
+					typ = x.Tags.Flow.Type
+				} else {
+					typ = x.Type
+				}
+
+				writeLine(name, typ, x.Comment, 0, fi)
+			}
+		}
+		return
+	}
+
+	if s.Type == "struct" {
+		// Indent the struct key
+		for i := 0; i < level; i++ {
+			write(fi, "\t")
+		}
+		write(fi, fmt.Sprintf("\t%s: object {\n", name))
+		for i := range s.Children {
+			p.WriteStructBody(s.Children[i], level+1, fi)
+		}
+		for i := level; i > 0; i-- {
+			// Indent the ending struct braces
+			for j := level; j > 0; j-- {
+				write(fi, "\t")
+			}
+		}
+		write(fi, "\t},\n")
+		return
+	}
+
+	writeLine(name, typ, s.Comment, level, fi)
+}
+
+func writeLine(name, t, comment string, level int, fi *os.File) {
+
+	for i := 0; i < level; i++ {
+		// Indent each line the amount of levels it is deep
+		write(fi, "\t")
+	}
+	if comment != "" {
+		write(fi, fmt.Sprintf("\t%s: %s,\t//%s", name, t, comment))
+	} else {
+		write(fi, fmt.Sprintf("\t%s: %s,\n", name, t))
+	}
+}
+
+func write(fi *os.File, line string) {
+	if _, err := fi.WriteString(line); err != nil {
+		log.WithError(err).Fatalln("error writing")
+	}
 }
