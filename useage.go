@@ -7,19 +7,19 @@ func usage() {
 	GoFlow Usage:
 	Flags:
 		-dir	Parse a complete directory 
-			example: 	-dir=../src/appname/models/
+			example: 	-dir= ../src/appname/models/
 			default: 	"./"
 
 		-file	Parse a single go file 
-			example: 	-file=../src/appname/models/app.go
+			example: 	-file= ../src/appname/models/app.go
 			overrides 	-dir and -recursive
 
 		-out	Saves content to folder
-			example: 	-out=../src/appname/models/
-						-out=../src/appname/models/customname.js
+			example: 	-out= ../src/appname/models/
+						-out= ../src/appname/models/customname.js
 			default: 	"./models". 
-		-recursive	Transcends directories
-			example:	-recursive="true"
+		-r	Transcends directories
+			example:	-recursive= false
 			default:	"true"
 `)
 }
