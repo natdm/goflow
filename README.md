@@ -36,7 +36,7 @@ Features include:
 * Add `// @strict` to the bottom of any comment above a struct to parse the [more strict flow object](https://flowtype.org/docs/objects.html#exact-object-types). 
 
 # Caveats:
-* Currently, embedded types are not working. Coming soon.
+* ~~Currently, embedded types are not working. Coming soon.~~
 * Nested structs are parsed as Objects (but could be overridden by using the `flow` tag).
 * `error` and`time.*` are parsed as `string`
 * Slices of pointers are removing the flow decoration, `?`. You will not be able to check if null yet.
@@ -117,5 +117,5 @@ export type Person = {
 - ~~Allow for primitives (`String` as well as the current `string`)~~ *Done - do it with ftype*
 - ~~Speed up parsing of large files. 297 types and 817 fields take 30 seconds~~ *Done (cut time in half), but could always be better*
 - Don't blow up on unexported fields with json tags, although that shouldn't be a thing
-- Parse embedded types
+- ~~Parse embedded types~~ *Done*
 - Slices of pointers are removing pointer reference
